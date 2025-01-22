@@ -10,8 +10,8 @@ on:
       image_postfix:
         required: true
         type: string
-  schedule:
-    - cron: "17 0 * * *"
+  #schedule:
+  #  - cron: "17 0 * * *"
 
 concurrency:
   group: docker-images-builds
