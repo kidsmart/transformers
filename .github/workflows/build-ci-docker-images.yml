@@ -10,8 +10,8 @@ on:
       image_postfix:
         required: true
         type: string
-  schedule:
-    - cron: "6 0 * * *"
+  #schedule:
+  #  - cron: "6 0 * * *"
 
 
 concurrency:
