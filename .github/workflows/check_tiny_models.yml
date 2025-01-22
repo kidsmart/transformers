@@ -5,8 +5,8 @@ on:
     branches:
       - check_tiny_models*
   repository_dispatch:
-  schedule:
-    - cron: "0 2 * * *"
+  #schedule:
+  #  - cron: "0 2 * * *"
 
 env:
   TOKEN: ${{ secrets.TRANSFORMERS_HUB_BOT_HF_TOKEN }}
