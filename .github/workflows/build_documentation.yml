@@ -1,13 +1,13 @@
 name: Build documentation
 
 on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-      - doc-builder*
-      - v*-release
-      - use_templates
+  #workflow_dispatch:
+  #push:
+  #  branches:
+  #    - main
+  #    - doc-builder*
+  #    - v*-release
+  #    - use_templates
 
 jobs:
    build:
