@@ -14,6 +14,17 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
+## Local instructions - KidSmart
+
+```bash
+aws codeartifact get-authorization-token --domain kidsmart --domain-owner 665512807284 --query authorizationToken --output text --profile rr-ron
+
+aws codeartifact login --tool pip --repository kidsmart --domain kidsmart --domain-owner 665512807284 --profile rr-ron
+
+pip install -e ".[dev]"
+```
+
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://huggingface.co/datasets/huggingface/documentation-images/raw/main/transformers-logo-dark.svg">
