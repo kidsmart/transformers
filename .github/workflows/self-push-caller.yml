@@ -2,15 +2,15 @@
 name: Self-hosted runner (push-caller)
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "src/**"
-      - "tests/**"
-      - ".github/**"
-      - "templates/**"
-      - "utils/**"
+  #push:
+  #  branches:
+  #    - main
+  #  paths:
+  #    - "src/**"
+  #    - "tests/**"
+  #    - ".github/**"
+  #    - "templates/**"
+  # - "utils/**"
 
 jobs:
   check-for-setup:
