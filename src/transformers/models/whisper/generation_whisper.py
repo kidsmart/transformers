@@ -1041,7 +1041,7 @@ class WhisperGenerationMixin(GenerationMixin):
 
         if return_token_timestamps and hasattr(generation_config, "alignment_heads"):
             num_frames = getattr(generation_config, "num_frames", None)
-            seek_outputs["token_timestamps"] = self._extract_token_timestamps(
+            seek_outputs["token_timestamps"] = self._extract_token_timestamps_optimized(
                 seek_outputs,
                 generation_config.alignment_heads,
                 num_frames=num_frames,
