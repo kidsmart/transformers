@@ -209,6 +209,56 @@ def _compute_mask_indices(
     return spec_aug_mask
 
 
+@torch.cuda.amp.autocast()
+def _prepare_4d_causal_attention_mask_optimized(
+    attention_mask,
+    sequence_length,
+    target_length,
+    dtype,
+    device,
+    cache_position,
+    batch_size,
+):
+    """
+    Highly optimized version of 4D attention mask preparation.
+    Uses mixed precision and efficient tensor operations.
+    """
+    if attention_mask is not None and attention_mask.dim() == 4:
+        return attention_mask
+    
+    # Efficient mask creation
+    min_dtype = torch.finfo(dtype).min
+    causal_mask = torch.full(
+        (sequence_length, target_length),
+        fill_value=min_dtype,
+        dtype=dtype,
+        device=device
+    )
+    
+    if sequence_length != 1:
+        # Use efficient triu operation
+        causal_mask.triu_(diagonal=1)
+    
+    # Vectorized range comparison
+    position_mask = (
+        torch.arange(target_length, device=device).unsqueeze(0) > 
+        cache_position.reshape(-1, 1)
+    )
+    causal_mask.mul_(position_mask)
+    
+    # Efficient expansion
+    causal_mask = causal_mask.expand(batch_size, 1, sequence_length, target_length)
+    
+    if attention_mask is not None:
+        mask_length = attention_mask.shape[-1]
+        
+        # Efficient mask combination
+        mask_slice = causal_mask[:, :, :, :mask_length]
+        padding_mask = (mask_slice + attention_mask[:, None, None, :]) == 0
+        mask_slice.masked_fill_(padding_mask, min_dtype)
+    
+    return causal_mask
+
 class WhisperPositionalEmbedding(nn.Embedding):
     def __init__(self, num_positions: int, embedding_dim: int, padding_idx: Optional[int] = None):
         super().__init__(num_positions, embedding_dim)
@@ -1407,7 +1457,7 @@ class WhisperDecoder(WhisperPreTrainedModel):
             )
 
         # In case the provided `attention` mask is 2D, we generate a causal mask here (4D).
-        causal_mask = self._prepare_4d_causal_attention_mask_optimized(
+        causal_mask = _prepare_4d_causal_attention_mask_optimized(
             attention_mask,
             sequence_length=sequence_length,
             target_length=target_length,
@@ -1431,55 +1481,6 @@ class WhisperDecoder(WhisperPreTrainedModel):
 
         return causal_mask
 
-    @torch.cuda.amp.autocast()
-    def _prepare_4d_causal_attention_mask_optimized(
-        attention_mask,
-        sequence_length,
-        target_length,
-        dtype,
-        device,
-        cache_position,
-        batch_size,
-    ):
-        """
-        Highly optimized version of 4D attention mask preparation.
-        Uses mixed precision and efficient tensor operations.
-        """
-        if attention_mask is not None and attention_mask.dim() == 4:
-            return attention_mask
-        
-        # Efficient mask creation
-        min_dtype = torch.finfo(dtype).min
-        causal_mask = torch.full(
-            (sequence_length, target_length),
-            fill_value=min_dtype,
-            dtype=dtype,
-            device=device
-        )
-        
-        if sequence_length != 1:
-            # Use efficient triu operation
-            causal_mask.triu_(diagonal=1)
-        
-        # Vectorized range comparison
-        position_mask = (
-            torch.arange(target_length, device=device).unsqueeze(0) > 
-            cache_position.reshape(-1, 1)
-        )
-        causal_mask.mul_(position_mask)
-        
-        # Efficient expansion
-        causal_mask = causal_mask.expand(batch_size, 1, sequence_length, target_length)
-        
-        if attention_mask is not None:
-            mask_length = attention_mask.shape[-1]
-            
-            # Efficient mask combination
-            mask_slice = causal_mask[:, :, :, :mask_length]
-            padding_mask = (mask_slice + attention_mask[:, None, None, :]) == 0
-            mask_slice.masked_fill_(padding_mask, min_dtype)
-        
-        return causal_mask
 
 
 @add_start_docstrings(
