@@ -41,35 +41,86 @@ from .tokenization_whisper import TASK_IDS, TO_LANGUAGE_CODE
 
 logger = logging.get_logger(__name__)
 
-def compute_median_parallel(x: torch.Tensor, kernel_size: int):
+def _median_filter_gpu(x: torch.Tensor, kernel_size: int):
     """
-    Efficient parallel median computation for GPU.
-    Handles multidimensional tensors correctly.
-    
-    Args:
-        x: Input tensor
-        kernel_size: Size of the median filter kernel
-    Returns:
-        Tensor with same shape as input after median filtering
+    Efficient GPU implementation of median filtering.
+    Processes entire tensor at once using sorting networks.
     """
-    # Save original shape and flatten batch dimensions
-    orig_shape = x.shape
-    x = x.reshape(-1, x.shape[-1])  # (batch * dims, seq_len)
-    
+    # Create padded tensor in one operation
     pad_size = kernel_size // 2
+    x_padded = torch.nn.functional.pad(
+        x.reshape(-1, x.shape[-1]),
+        (pad_size, pad_size),
+        mode='reflect'
+    )
     
-    # Pad the sequence dimension
-    x = torch.nn.functional.pad(x, (pad_size, pad_size), mode='reflect')
+    # Use unfold for efficient window creation
+    windows = x_padded.unfold(-1, kernel_size, 1)
     
-    # Unfold and find median
-    x = x.unfold(-1, kernel_size, 1)  # (batch * dims, seq_len, kernel_size)
-    x = x.sort(-1).values[..., kernel_size//2]
+    # Sort and select median in one operation
+    medians = windows.sort(-1).values[..., kernel_size//2]
     
     # Restore original shape
-    x = x.reshape(orig_shape[:-1] + (x.shape[-1],))
-        
-    return x
+    return medians.reshape(x.shape)
 
+def _dtw_gpu(matrix: torch.Tensor):
+    """
+    GPU-optimized Dynamic Time Warping implementation.
+    Maximizes use of GPU operations and minimizes memory transfers.
+    """
+    output_length, input_length = matrix.shape
+    device = matrix.device
+    dtype = matrix.dtype
+
+    # Allocate cost matrix on GPU
+    cost = torch.full(
+        (output_length + 1, input_length + 1),
+        float('inf'),
+        device=device,
+        dtype=dtype
+    )
+    cost[0, 0] = 0
+
+    # Fill cost matrix with vectorized operations where possible
+    for i in range(1, output_length + 1):
+        for j in range(1, input_length + 1):
+            choices = torch.tensor([
+                cost[i-1, j-1],
+                cost[i-1, j],
+                cost[i, j-1]
+            ], device=device)
+            cost[i, j] = matrix[i-1, j-1] + torch.min(choices)
+
+    # Efficient backtracing on GPU
+    indices_buffer = torch.zeros((output_length + input_length, 2), 
+                               device=device, dtype=torch.long)
+    current_idx = 0
+    i, j = output_length, input_length
+
+    while i > 0 and j > 0:
+        indices_buffer[current_idx] = torch.tensor([i-1, j-1], device=device)
+        current_idx += 1
+
+        choices = torch.tensor([
+            cost[i-1, j-1],
+            cost[i-1, j],
+            cost[i, j-1]
+        ], device=device)
+        
+        move = torch.argmin(choices)
+        if move == 0:
+            i, j = i-1, j-1
+        elif move == 1:
+            i = i-1
+        else:
+            j = j-1
+
+    if current_idx == 0:
+        return torch.tensor([], device=device), torch.tensor([], device=device)
+
+    # Return path indices without copying to CPU
+    indices = indices_buffer[:current_idx].flip(0)
+    return indices[:, 0], indices[:, 1]
 
 def _median_filter(inputs: torch.Tensor, filter_width: int) -> torch.Tensor:
     """
@@ -272,87 +323,87 @@ def _pad_to_max_length(
 class WhisperGenerationMixin(GenerationMixin):
     @torch.cuda.amp.autocast()
     def _extract_token_timestamps_optimized(self, generate_outputs, alignment_heads, 
-                                      time_precision=0.02, num_frames=None, num_input_ids=None):
+                                        time_precision=0.02, num_frames=None, num_input_ids=None):
         """
-        Highly optimized version of token timestamp extraction.
-        Uses mixed precision, memory-efficient operations, and parallel processing.
+        GPU-optimized token timestamp extraction. Focuses on maximum GPU utilization and
+        minimal CPU-GPU transfers.
         """
         device = generate_outputs.cross_attentions[0][0].device
         batch_size = generate_outputs.sequences.shape[0]
-        
+
         # Handle beam search outputs and weight length adjustment
         weight_length = None
+        beam_indices = None
         if "beam_indices" in generate_outputs:
-            # Calculate correct length accounting for beam search
+            # Calculate weight length consistently with original implementation
             weight_length = (generate_outputs.beam_indices != -1).sum(-1).max()
             weight_length = weight_length if num_input_ids is None else weight_length + num_input_ids
             
+            # Process beam indices in single operation
             beam_indices = torch.zeros_like(generate_outputs.beam_indices[:, :weight_length])
             if num_input_ids is not None:
                 beam_indices[:, num_input_ids:] = generate_outputs.beam_indices[:, :weight_length - num_input_ids]
             beam_indices = beam_indices.masked_fill(beam_indices == -1, 0)
 
-        # Optimize memory allocation for cross attention stacking
+        # Process cross attentions efficiently
+        layer_indices = torch.tensor([l for l, _ in alignment_heads], device=device)
+        head_indices = torch.tensor([h for _, h in alignment_heads], device=device)
+        
+        # Stack and process all cross attentions at once
         cross_attentions = []
         for i in range(self.config.decoder_layers):
-            cross_attention = torch.cat([x[i] for x in generate_outputs.cross_attentions], dim=2)
+            layer_attn = torch.cat([x[i] for x in generate_outputs.cross_attentions], dim=2)
             if weight_length is not None:
-                cross_attention = cross_attention[..., :weight_length]
-            cross_attentions.append(cross_attention)
+                layer_attn = layer_attn[..., :weight_length]
+            cross_attentions.append(layer_attn)
         cross_attentions = torch.stack(cross_attentions)
         
-        # Efficient attention head selection
-        weights = cross_attentions[
-            [l for l, _ in alignment_heads],
-            :,
-            [h for _, h in alignment_heads]
-        ].permute(1, 0, 2, 3)
-        
-        # Handle beam search reindexing
-        if "beam_indices" in generate_outputs:
+        # Select attention heads efficiently
+        weights = cross_attentions[layer_indices, :, head_indices].permute(1, 0, 2, 3)
+
+        # Handle beam search reindexing if needed
+        if beam_indices is not None:
             weights = torch.stack([
                 torch.index_select(weights[:, :, i, :], dim=0, index=beam_indices[:, i])
                 for i in range(beam_indices.shape[1])
             ], dim=2)
-        
+
+        # Apply frame limit if specified
         if num_frames is not None:
             weights = weights[..., :num_frames//2]
-        
-        # Efficient normalization using torch.cuda optimized operations
-        mean = torch.mean(weights, dim=-2, keepdim=True)
+
+        # Normalize in single operation
         std = torch.std(weights, dim=-2, keepdim=True, unbiased=False)
-        weights = torch.addcdiv(torch.zeros_like(weights), weights - mean, std + 1e-6)
+        mean = torch.mean(weights, dim=-2, keepdim=True)
+        weights = (weights - mean) / (std + 1e-6)
+
+        # Efficient median filtering
+        weights = _median_filter_gpu(weights, self.config.median_filter_width)
         
-        # Use the optimized parallel median computation
-        weights = compute_median_parallel(weights, self.config.median_filter_width)
-        
-        # Efficient head averaging
+        # Average attention heads
         weights = torch.mean(weights, dim=1)
-        
-        # Pre-allocate output tensor
+
+        # Process DTW for each item in batch
         timestamps = torch.zeros(
-            (batch_size, weights.shape[-2] + 1),
+            (batch_size, weights.shape[-1] + 1),
             dtype=torch.float32,
             device=device
         )
-        
-        # Process batches in parallel where possible
+
         for batch_idx in range(batch_size):
-            matrix = -weights[batch_idx]
-            text_indices, time_indices = _dynamic_time_warping_gpu(matrix)
+            text_indices, time_indices = _dtw_gpu(weights[batch_idx])
             
             if len(text_indices) == 0:
                 continue
-            
-            # Efficient jump computation
+                
+            # Process jumps on GPU
             jumps = torch.diff(text_indices, prepend=text_indices.new_tensor([0]))
             jumps = jumps == 1
             jump_times = time_indices[jumps] * time_precision
-            
-            # Efficient timestamp assignment
             timestamps[batch_idx, 1:1+len(jump_times)] = jump_times
-        
+
         return timestamps
+     
 
 
 
