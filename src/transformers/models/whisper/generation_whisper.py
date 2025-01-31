@@ -89,17 +89,21 @@ def _dynamic_time_warping_gpu(matrix: torch.Tensor, block_size: int = 1024):
         for start_j in range(0, input_length, block_size):
             end_j = min(start_j + block_size, input_length)
             
-            i_block = slice(start_i + 1, end_i + 1)
-            j_block = slice(start_j + 1, end_j + 1)
+            # Calculate correct indices for cost matrix lookup
+            i_start = start_i + 1
+            i_end = end_i + 1
+            j_start = start_j + 1
+            j_end = end_j + 1
             
-            c0 = cost[i_block-1, j_block-1].unsqueeze(2)
-            c1 = cost[i_block-1, j_block].unsqueeze(2)
-            c2 = cost[i_block, j_block-1].unsqueeze(2)
+            # Get the three neighboring cost values
+            c0 = cost[i_start-1:i_end-1, j_start-1:j_end-1].unsqueeze(2)
+            c1 = cost[i_start-1:i_end-1, j_start:j_end].unsqueeze(2)
+            c2 = cost[i_start:i_end, j_start-1:j_end-1].unsqueeze(2)
             
             costs = torch.cat([c0, c1, c2], dim=2)
             min_costs, _ = torch.min(costs, dim=2)
             
-            cost[i_block, j_block] = (
+            cost[i_start:i_end, j_start:j_end] = (
                 matrix[start_i:end_i, start_j:end_j] + min_costs
             )
     
