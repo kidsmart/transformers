@@ -239,7 +239,7 @@ def _pad_to_max_length(
 class WhisperGenerationMixin(GenerationMixin):
     @torch.cuda.amp.autocast()
     def _extract_token_timestamps_optimized(self, generate_outputs, alignment_heads, 
-                                        time_precision=0.02, num_frames=None):
+                                        time_precision=0.02, num_frames=None, num_input_ids=None):
         """
         Highly optimized version of token timestamp extraction.
         Uses mixed precision, memory-efficient operations, and parallel processing.
@@ -247,11 +247,26 @@ class WhisperGenerationMixin(GenerationMixin):
         device = generate_outputs.cross_attentions[0][0].device
         batch_size = generate_outputs.sequences.shape[0]
         
+        # Handle beam search outputs and weight length adjustment
+        weight_length = None
+        if "beam_indices" in generate_outputs:
+            # Calculate correct length accounting for beam search
+            weight_length = (generate_outputs.beam_indices != -1).sum(-1).max()
+            weight_length = weight_length if num_input_ids is None else weight_length + num_input_ids
+            
+            beam_indices = torch.zeros_like(generate_outputs.beam_indices[:, :weight_length])
+            if num_input_ids is not None:
+                beam_indices[:, num_input_ids:] = generate_outputs.beam_indices[:, :weight_length - num_input_ids]
+            beam_indices = beam_indices.masked_fill(beam_indices == -1, 0)
+
         # Optimize memory allocation for cross attention stacking
-        cross_attentions = torch.stack([
-            torch.cat([x[i] for x in generate_outputs.cross_attentions], dim=2)
-            for i in range(self.config.decoder_layers)
-        ])
+        cross_attentions = []
+        for i in range(self.config.decoder_layers):
+            cross_attention = torch.cat([x[i] for x in generate_outputs.cross_attentions], dim=2)
+            if weight_length is not None:
+                cross_attention = cross_attention[..., :weight_length]
+            cross_attentions.append(cross_attention)
+        cross_attentions = torch.stack(cross_attentions)
         
         # Efficient attention head selection
         weights = cross_attentions[
@@ -259,6 +274,13 @@ class WhisperGenerationMixin(GenerationMixin):
             :,
             [h for _, h in alignment_heads]
         ].permute(1, 0, 2, 3)
+        
+        # Handle beam search reindexing
+        if "beam_indices" in generate_outputs:
+            weights = torch.stack([
+                torch.index_select(weights[:, :, i, :], dim=0, index=beam_indices[:, i])
+                for i in range(beam_indices.shape[1])
+            ], dim=2)
         
         if num_frames is not None:
             weights = weights[..., :num_frames//2]
@@ -268,12 +290,13 @@ class WhisperGenerationMixin(GenerationMixin):
         std = torch.std(weights, dim=-2, keepdim=True, unbiased=False)
         weights = torch.addcdiv(torch.zeros_like(weights), weights - mean, std + 1e-6)
         
+        # Use the optimized parallel median computation
         # Optimized median filtering
         pad_width = self.config.median_filter_width // 2
         weights = torch.nn.functional.pad(
             weights, (pad_width, pad_width, 0, 0), mode="reflect"
         )
-        
+
         # Use efficient unfold operation
         weights = weights.unfold(-1, self.config.median_filter_width, 1)
         weights, _ = torch.sort(weights, dim=-1)
