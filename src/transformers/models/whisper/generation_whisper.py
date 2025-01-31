@@ -41,6 +41,15 @@ from .tokenization_whisper import TASK_IDS, TO_LANGUAGE_CODE
 
 logger = logging.get_logger(__name__)
 
+def compute_median_parallel(x: torch.Tensor, kernel_size: int):
+    """
+    Efficient parallel median computation for GPU.
+    """
+    pad_size = kernel_size // 2
+    x = torch.nn.functional.pad(x, (pad_size, pad_size), mode='reflect')
+    x = x.unfold(-1, kernel_size, 1)
+    return x.sort(-1).values[:, :, pad_size]
+
 
 def _median_filter(inputs: torch.Tensor, filter_width: int) -> torch.Tensor:
     """
@@ -243,7 +252,7 @@ def _pad_to_max_length(
 class WhisperGenerationMixin(GenerationMixin):
     @torch.cuda.amp.autocast()
     def _extract_token_timestamps_optimized(self, generate_outputs, alignment_heads, 
-                                        time_precision=0.02, num_frames=None, num_input_ids=None):
+                                      time_precision=0.02, num_frames=None, num_input_ids=None):
         """
         Highly optimized version of token timestamp extraction.
         Uses mixed precision, memory-efficient operations, and parallel processing.
@@ -295,16 +304,7 @@ class WhisperGenerationMixin(GenerationMixin):
         weights = torch.addcdiv(torch.zeros_like(weights), weights - mean, std + 1e-6)
         
         # Use the optimized parallel median computation
-        # Optimized median filtering
-        pad_width = self.config.median_filter_width // 2
-        weights = torch.nn.functional.pad(
-            weights, (pad_width, pad_width, 0, 0), mode="reflect"
-        )
-
-        # Use efficient unfold operation
-        weights = weights.unfold(-1, self.config.median_filter_width, 1)
-        weights, _ = torch.sort(weights, dim=-1)
-        weights = weights[..., pad_width]
+        weights = compute_median_parallel(weights, self.config.median_filter_width)
         
         # Efficient head averaging
         weights = torch.mean(weights, dim=1)
