@@ -47,35 +47,26 @@ def compute_median_parallel(x: torch.Tensor, kernel_size: int):
     Handles multidimensional tensors correctly.
     
     Args:
-        x: Input tensor of shape (batch_size, num_heads, seq_len)
+        x: Input tensor
         kernel_size: Size of the median filter kernel
     Returns:
         Tensor with same shape as input after median filtering
     """
-    # Save original shape
+    # Save original shape and flatten batch dimensions
     orig_shape = x.shape
+    x = x.reshape(-1, x.shape[-1])  # (batch * dims, seq_len)
     
-    # Reshape to 3D if needed - (batch * heads, 1, seq_len)
-    if x.dim() > 3:
-        x = x.reshape(-1, x.shape[-2], x.shape[-1])
-    
-    batch_heads, seq_len = x.shape[0], x.shape[-1]
     pad_size = kernel_size // 2
     
-    # Add required dummy dimension for padding
-    x = x.unsqueeze(2)  # (batch * heads, seq_len, 1)
-    
     # Pad the sequence dimension
-    x = torch.nn.functional.pad(x, (0, 0, pad_size, pad_size), mode='reflect')
+    x = torch.nn.functional.pad(x, (pad_size, pad_size), mode='reflect')
     
     # Unfold and find median
-    x = x.squeeze(2)
-    x = x.unfold(-1, kernel_size, 1)  # (batch * heads, seq_len, kernel_size)
+    x = x.unfold(-1, kernel_size, 1)  # (batch * dims, seq_len, kernel_size)
     x = x.sort(-1).values[..., kernel_size//2]
     
-    # Restore original shape if needed
-    if len(orig_shape) > 3:
-        x = x.reshape(orig_shape[:-1])
+    # Restore original shape
+    x = x.reshape(orig_shape[:-1] + (x.shape[-1],))
         
     return x
 
