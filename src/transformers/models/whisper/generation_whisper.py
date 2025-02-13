@@ -603,7 +603,7 @@ class WhisperGenerationMixin(GenerationMixin):
             language=language, task=task, is_multilingual=is_multilingual, generation_config=generation_config
         )
         self._set_num_frames(
-            return_token_timestamps=return_token_timestamps, generation_config=generation_config, kwargs=kwargs
+            return_token_timestamps=return_token_timestamps, return_crossattention=return_crossattention, generation_config=generation_config, kwargs=kwargs
         )
         self._set_thresholds_and_condition(
             generation_config=generation_config,
@@ -1611,8 +1611,8 @@ class WhisperGenerationMixin(GenerationMixin):
             )
 
     @staticmethod
-    def _set_num_frames(return_token_timestamps, generation_config, kwargs):
-        if return_token_timestamps:
+    def _set_num_frames(return_token_timestamps, return_crossattention, generation_config, kwargs):
+        if return_token_timestamps or return_crossattention:
             if getattr(generation_config, "task", None) == "translate":
                 logger.warning("Token-level timestamps may not be reliable for task 'translate'.")
             if not hasattr(generation_config, "alignment_heads"):
