@@ -868,7 +868,7 @@ class WhisperGenerationMixin(GenerationMixin):
         if return_crossattention:
             # Return the cross attention data without calculating timestamps
             outputs = {
-                "sequences": sequences,
+                "sequences": padded_outputs,
                 "cross_attentions": [output.get("cross_attentions", None) for output in seek_outputs],
                 "alignment_heads": generation_config.alignment_heads if hasattr(generation_config, "alignment_heads") else None,
                 "num_frames": generation_config.get("num_frames", None),
