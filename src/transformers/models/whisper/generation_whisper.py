@@ -356,6 +356,7 @@ class WhisperGenerationMixin(GenerationMixin):
         time_precision: float = 0.02,
         time_precision_features: float = 0.01,
         return_token_timestamps: Optional[bool] = None,
+        return_crossattention: Optional[bool] = None,  # New parameter
         return_segments: bool = False,
         return_dict_in_generate: Optional[bool] = None,
         force_unique_generate_call: Optional[bool] = None,
@@ -591,6 +592,7 @@ class WhisperGenerationMixin(GenerationMixin):
         return_dict_in_generate = self._set_return_outputs(
             return_dict_in_generate=return_dict_in_generate,
             return_token_timestamps=return_token_timestamps,
+            return_crossattention=return_crossattention,
             logprob_threshold=logprob_threshold,
             generation_config=generation_config,
         )
@@ -882,6 +884,16 @@ class WhisperGenerationMixin(GenerationMixin):
             outputs = {
                 "sequences": sequences,
             }
+
+        if return_crossattention:
+            # Return the cross attention data without calculating timestamps
+            outputs = {
+                "sequences": sequences,
+                "cross_attentions": [output.get("cross_attentions", None) for output in seek_outputs],
+                "alignment_heads": generation_config.alignment_heads if hasattr(generation_config, "alignment_heads") else None,
+                "num_frames": generation_config.get("num_frames", None),
+            }
+            return outputs
 
         if return_segments:
             outputs["segments"] = final_segments
@@ -1280,14 +1292,20 @@ class WhisperGenerationMixin(GenerationMixin):
             logger.warning(warning_prefix.format(f"no_speech_threshold is set to {no_speech_threshold}"))
 
     @staticmethod
-    def _set_return_outputs(return_dict_in_generate, return_token_timestamps, logprob_threshold, generation_config):
+    def _set_return_outputs(return_dict_in_generate, return_token_timestamps, return_crossattention, logprob_threshold, generation_config):
         if return_dict_in_generate is None:
             return_dict_in_generate = generation_config.return_dict_in_generate
         else:
             generation_config.return_dict_in_generate = return_dict_in_generate
 
         generation_config.return_token_timestamps = return_token_timestamps
-        if return_token_timestamps:
+        if return_crossattention:
+            # Always collect cross attentions but defer timestamp calculation
+            generation_config.output_attentions = True
+            generation_config.output_scores = True
+            # Store that we want cross attentions for later processing
+            generation_config.store_crossattention = True
+        elif return_token_timestamps:
             generation_config.return_dict_in_generate = True
             generation_config.output_attentions = True
             generation_config.output_scores = True
