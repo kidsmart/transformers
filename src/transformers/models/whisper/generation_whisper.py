@@ -865,6 +865,16 @@ class WhisperGenerationMixin(GenerationMixin):
             force_unique_generate_call=force_unique_generate_call,
         )
 
+        if return_crossattention:
+            # Return the cross attention data without calculating timestamps
+            outputs = {
+                "sequences": sequences,
+                "cross_attentions": [output.get("cross_attentions", None) for output in seek_outputs],
+                "alignment_heads": generation_config.alignment_heads if hasattr(generation_config, "alignment_heads") else None,
+                "num_frames": generation_config.get("num_frames", None),
+            }
+            return outputs
+
         if return_dict_in_generate and generation_config.return_dict_in_generate:
             logger.warning_once(
                 "You have passed `return_dict_in_generate=True` and `return_timestamps=True`, this automatically sets `return_segments=True` to access the resuls of the underlying calls to GenerationMixin's generate in the returned `segments`."
@@ -885,15 +895,6 @@ class WhisperGenerationMixin(GenerationMixin):
                 "sequences": sequences,
             }
 
-        if return_crossattention:
-            # Return the cross attention data without calculating timestamps
-            outputs = {
-                "sequences": sequences,
-                "cross_attentions": [output.get("cross_attentions", None) for output in seek_outputs],
-                "alignment_heads": generation_config.alignment_heads if hasattr(generation_config, "alignment_heads") else None,
-                "num_frames": generation_config.get("num_frames", None),
-            }
-            return outputs
 
         if return_segments:
             outputs["segments"] = final_segments
