@@ -871,7 +871,7 @@ class WhisperGenerationMixin(GenerationMixin):
                 "sequences": padded_outputs,
                 "cross_attentions": [output["cross_attentions"] if isinstance(output, dict) else output for output in seek_outputs],
                 "alignment_heads": generation_config.alignment_heads if hasattr(generation_config, "alignment_heads") else None,
-                "num_frames": generation_config.get("num_frames", None),
+                "num_frames": getattr(generation_config, "num_frames", None),
             }
             return outputs
 
