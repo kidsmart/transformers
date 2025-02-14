@@ -217,6 +217,78 @@ def _pad_to_max_length(
     else:
         return sequences
 
+class GenerationOutputs:
+    """
+    A class that mimics the structure of generation outputs
+    expected by _extract_token_timestamps.
+    
+    Attributes:
+        sequences (torch.Tensor): The generated token sequences
+        cross_attentions (List[torch.Tensor]): Cross attention values from the model
+        beam_indices (Optional[torch.Tensor]): Indices for beam search results, if used
+    """
+    def __init__(
+        self,
+        sequences: torch.Tensor,
+        cross_attentions: List[List[torch.Tensor]],  # List of layers, each containing attention tensors
+        beam_indices: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        scores: Optional[List[torch.Tensor]] = None
+    ):
+        # Validate inputs
+        if not isinstance(sequences, torch.Tensor):
+            raise ValueError("sequences must be a torch.Tensor")
+        if not isinstance(cross_attentions, list):
+            raise ValueError("cross_attentions must be a list")
+        if beam_indices is not None and not isinstance(beam_indices, torch.Tensor):
+            raise ValueError("beam_indices must be a torch.Tensor or None")
+            
+        self.sequences = sequences
+        self.cross_attentions = cross_attentions
+        self.beam_indices = beam_indices
+        self.attention_mask = attention_mask
+        self.scores = scores
+
+    def __getitem__(self, key):
+        """
+        Enables dictionary-like access to attributes.
+        Args:
+            key: String name of attribute or integer index
+        Returns:
+            The requested attribute value
+        """
+        if isinstance(key, str):
+            return getattr(self, key)
+        return self.sequences[key]
+
+    def get(self, key, default=None):
+        """
+        Dictionary-style get method with default value support.
+        Args:
+            key: Attribute name to retrieve
+            default: Default value if attribute doesn't exist
+        Returns:
+            Attribute value or default
+        """
+        return getattr(self, key, default)
+
+    def to(self, device):
+        """
+        Moves all tensors to specified device.
+        Args:
+            device: torch device to move tensors to
+        Returns:
+            Self with tensors moved to device
+        """
+        self.sequences = self.sequences.to(device)
+        if self.beam_indices is not None:
+            self.beam_indices = self.beam_indices.to(device)
+        if self.attention_mask is not None:
+            self.attention_mask = self.attention_mask.to(device)
+        if self.scores is not None:
+            self.scores = [score.to(device) for score in self.scores]
+        return self
+
 
 class WhisperGenerationMixin(GenerationMixin):
     def _extract_token_timestamps(
