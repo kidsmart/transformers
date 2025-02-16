@@ -357,6 +357,7 @@ class WhisperGenerationMixin(GenerationMixin):
         time_precision_features: float = 0.01,
         return_token_timestamps: Optional[bool] = None,
         return_segments: bool = False,
+        inspect_outputs: Optional[bool] = False,
         return_dict_in_generate: Optional[bool] = None,
         force_unique_generate_call: Optional[bool] = None,
         **kwargs,
@@ -790,8 +791,11 @@ class WhisperGenerationMixin(GenerationMixin):
                 is_shortform=is_shortform,
                 batch_size=batch_size,
                 attention_mask=attention_mask,
+                inspect_outputs=inspect_outputs,
                 kwargs=kwargs,
             )
+            if inspect_outputs:
+                return {"seek_outputs": seek_outputs, "seek_sequences": seek_sequences}
 
             # 6.7 In every generated sequence, split by timestamp tokens and extract segments
             for i, seek_sequence in enumerate(seek_sequences):
@@ -908,6 +912,7 @@ class WhisperGenerationMixin(GenerationMixin):
         is_shortform,
         batch_size,
         attention_mask,
+        inspect_outputs,
         kwargs,
     ):
         kwargs = copy.copy(kwargs)
@@ -968,6 +973,15 @@ class WhisperGenerationMixin(GenerationMixin):
                 return_token_timestamps=return_token_timestamps,
                 generation_config=generation_config,
                 is_shortform=is_shortform,
+            )
+
+            if inspect_outputs:
+                return             (
+                seek_sequences,
+                seek_outputs,
+                "should_skip",
+                "do_condition_on_prev_tokens",
+                "model_output_type",
             )
 
             if cur_bsz < batch_size:
