@@ -973,6 +973,7 @@ class WhisperGenerationMixin(GenerationMixin):
                 return_token_timestamps=return_token_timestamps,
                 generation_config=generation_config,
                 is_shortform=is_shortform,
+                inspect_outputs=inspect_outputs,
             )
 
             if inspect_outputs:
@@ -1068,6 +1069,7 @@ class WhisperGenerationMixin(GenerationMixin):
         return_token_timestamps,
         generation_config,
         is_shortform,
+        inspect_outputs
     ):
         # remove all previously passed decoder input ids
         # should happen only if it is the first generated segment
@@ -1084,7 +1086,8 @@ class WhisperGenerationMixin(GenerationMixin):
                 num_frames=num_frames,
                 num_input_ids=decoder_input_ids.shape[-1],
             )
-
+        if inspect_outputs:
+            return seek_outputs["sequences"][:, start_idx:], seek_outputs
         def split_by_batch_index(values, key, batch_idx, is_shortform, beam_indices=None):
             if beam_indices is not None and key == "scores":
                 return [v[beam_idx].cpu() for (v, beam_idx) in zip(values, beam_indices[batch_idx][: len(values)])]
